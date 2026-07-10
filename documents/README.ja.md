@@ -92,6 +92,8 @@ GitHub Actions は Microsoft が提供するサービスであり、高性能な
         - [12.11.2.2 cm9vdA の u-boot 作成スクリプトの使用方法](#121122-cm9vda-の-u-boot-作成スクリプトの使用方法)
     - [12.12 メモリサイズの誤認識](#1212-メモリサイズの誤認識)
     - [12.13 dtb ファイルの逆コンパイル方法](#1213-dtb-ファイルの逆コンパイル方法)
+      - [12.13.1 dtb ファイルを直接逆コンパイル](#12131-dtb-ファイルを直接逆コンパイル)
+      - [12.13.2 実行中のデバイスから完全状態 DTS をエクスポート（推奨）](#12132-実行中のデバイスから完全状態-dts-をエクスポート推奨)
     - [12.14 cmdline 設定の変更方法](#1214-cmdline-設定の変更方法)
     - [12.15 新しいサポートデバイスの追加方法](#1215-新しいサポートデバイスの追加方法)
       - [12.15.1 デバイス設定ファイルの追加](#12151-デバイス設定ファイルの追加)
@@ -208,7 +210,7 @@ GitHub Actions のデフォルトコンパイル領域は 84G で、システム
     sudo mkfs.xfs /dev/github/runner
     sudo mkdir -p /builder
     sudo mount /dev/github/runner /builder
-    sudo chown -R runner.runner /builder
+    sudo chown -R runner:runner /builder
     df -Th
 ```
 
@@ -222,13 +224,13 @@ Armbian システムの [Docker](https://hub.docker.com/u/ophub) イメージの
 
 ```yaml
 - name: Upload Armbian image to Release
-  uses: ncipollo/release-action@main
+  uses: ophub/upload-to-release@main
   if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
   with:
     tag: Armbian_${{ env.ARMBIAN_RELEASE }}_${{ env.PACKAGED_OUTPUTDATE }}
     artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-    allowUpdates: true
-    token: ${{ secrets.GITHUB_TOKEN }}
+    allow_updates: true
+    gh_token: ${{ secrets.GITHUB_TOKEN }}
     body: |
       These are the Armbian OS image
       * OS information
@@ -581,7 +583,7 @@ armbian-update
 | オプションパラメータ  | デフォルト値        | 選択肢           | 説明                              |
 | -------- | ------------ | ------------- | -------------------------------- |
 | -r       | ophub/kernel | `<owner>/<repo>` | github.com からカーネルをダウンロードするリポジトリを設定  |
-| -u       | 自動        | stable/flippy/beta/rk3588/rk35xx/h6 | 使用するカーネルの [tags サフィックス](https://github.com/ophub/kernel/releases) を設定 |
+| -u       | 自動        | stable/flippy/beta/rk3588/rk35xx | 使用するカーネルの [tags サフィックス](https://github.com/ophub/kernel/releases) を設定 |
 | -k       | 最新版        | カーネルバージョン       | [カーネルバージョン](https://github.com/ophub/kernel/releases/tag/kernel_stable) を設定  |
 | -b       | yes          | yes/no        | カーネル更新時に現在使用中のカーネルを自動バックアップ    |
 | -d       | deb          | tar/deb       | 優先使用するカーネルパッケージ形式を設定。指定形式が存在しない場合、スクリプトは自動的に別の形式を試行します。カスタムドライバをコンパイルする場合は `deb` 形式を推奨。 |
@@ -1476,7 +1478,9 @@ cm9vdA のオープンソースプロジェクト [cm9vdA/build-linux](https://g
 
 ### 12.13 dtb ファイルの逆コンパイル方法
 
-一部の新しいデバイスは現在のサポートリストに含まれていない場合（またはハードウェアの違いがある場合）があり、dtb ファイルを逆コンパイルして関連パラメータを調整し、適合を試みることができます。
+#### 12.13.1 dtb ファイルを直接逆コンパイル
+
+既存の dtb ファイルを直接逆コンパイルし、関連パラメータを調整して適合させることができます。
 
 ```shell
 # 依存関係のインストール
@@ -1491,11 +1495,19 @@ dtc -I dts -O dtb -o xxx.dtb xxx.dts
 
 # 3. データを保存して再起動
 sync && reboot
-
-# 4. [任意アクション] 必要に応じてテスト
-# 例えば 12.16 で紹介した問題の解決時に、再インストールしてテスト
-armbian-install
 ```
+
+#### 12.13.2 実行中のデバイスから完全状態 DTS をエクスポート（推奨）
+
+特定のデバイスの適合および保守において、コンパイル済みのバイナリデバイスツリーファイル（.dtb）のみしか取得できず、対応するカーネルソースコード（.dts）が存在しない場合があります。その際は、正常に動作している Armbian システム上で以下のコマンドを実行し、カーネルランタイム環境から現在有効なデバイスツリーを直接逆コンパイルしてエクスポートすることをお勧めします：
+
+```shell
+dtc -I fs -O dts /sys/firmware/devicetree/base > my_runtime.dts
+```
+
+このコマンドはカーネルメモリから直接デバイスツリーデータを抽出するため、ディスク上の静的な .dtb ファイルを単に逆コンパイルするよりも正確で完全なテキストが得られます。ブートローダー（U-Boot など）やシステムファームウェアは、起動段階で実際のハードウェア検出結果に基づいてデバイスツリーを動的に修正または注入するからです（例：bootargs 起動パラメータのリアルタイム更新、特定ペリフェラルの status 状態の動的な切り替え、reg レジスタアドレスの調整など）。ディスク上の静的ファイルを直接逆コンパイルした場合、これらのランタイム変更を捕捉できません。
+
+この方法で取得されるのは、カーネルが最終的に適用した形態のランタイム（Runtime）デバイスツリーであり、システムの低レベルにおけるハードウェアの実際のトポロジーと動作状態を正確に反映しています。当該デバイスの .dts ソースコードを参照、修正、または再適合する際に、このファイルは極めて高い参考価値を持ち、競合のトラブルシューティングとペリフェラル設定の補完をより正確かつ効率的にします。
 
 ### 12.14 cmdline 設定の変更方法
 
@@ -1510,6 +1522,8 @@ Amlogic デバイスは `/boot/uEnv.txt` ファイルで設定します。Rockch
 - cmdline に `usbcore.usbfs_memory_mb=1024` 設定を追加することで、USBFS メモリバッファをデフォルトの `16 mb` からより大きなサイズに永続的に変更できます（`cat /sys/module/usbcore/parameters/usbfs_memory_mb`）。USB での大容量ファイル転送能力を向上させます。
 
 - cmdline に `usbcore.usb3_disable=1` 設定を追加することで、すべての USB 3.0 デバイスを無効にできます。
+
+- cmdline に `usbcore.autosuspend=-1` 設定を追加することで、USB オートサスペンドを無効にできます（USB デバイスの省電力による切断を防止）；`rootdelay=120` 設定を追加することで、起動時にルートパーティションをマウントする前に 120 秒待機します（USB デバイスが準備完了するまでの時間を確保）；`mitigations=off` 設定を追加することで、CPU 脆弱性の緩和策（Spectre/Meltdown）を無効にし、パフォーマンスを向上させます。
 
 - cmdline に `extraargs=video=HDMI-A-1:1920x1080@60` 設定を追加することで、ビデオ表示モードを 1080p に強制できます。
 

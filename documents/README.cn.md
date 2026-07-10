@@ -92,6 +92,8 @@ GitHub Actions 是 Microsoft 推出的一项服务，提供高性能的虚拟服
         - [12.11.2.2 如何使用 cm9vdA 的 u-boot 制作脚本](#121122-如何使用-cm9vda-的-u-boot-制作脚本)
     - [12.12 内存大小识别错误](#1212-内存大小识别错误)
     - [12.13 如何反编译 dtb 文件](#1213-如何反编译-dtb-文件)
+      - [12.13.1 直接反编译 dtb 文件](#12131-直接反编译-dtb-文件)
+      - [12.13.2 从运行中的设备导出完全态 DTS（推荐）](#12132-从运行中的设备导出完全态-dts推荐)
     - [12.14 如何修改 cmdline 设置](#1214-如何修改-cmdline-设置)
     - [12.15 如何添加新的支持设备](#1215-如何添加新的支持设备)
       - [12.15.1 添加设备配置文件](#12151-添加设备配置文件)
@@ -208,7 +210,7 @@ GitHub Actions 默认编译空间为 84G，去除系统和必要软件包后可�
     sudo mkfs.xfs /dev/github/runner
     sudo mkdir -p /builder
     sudo mount /dev/github/runner /builder
-    sudo chown -R runner.runner /builder
+    sudo chown -R runner:runner /builder
     df -Th
 ```
 
@@ -222,13 +224,13 @@ Armbian 系统 [Docker](https://hub.docker.com/u/ophub) 镜像的制作方法请
 
 ```yaml
 - name: Upload Armbian image to Release
-  uses: ncipollo/release-action@main
+  uses: ophub/upload-to-release@main
   if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
   with:
     tag: Armbian_${{ env.ARMBIAN_RELEASE }}_${{ env.PACKAGED_OUTPUTDATE }}
     artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-    allowUpdates: true
-    token: ${{ secrets.GITHUB_TOKEN }}
+    allow_updates: true
+    gh_token: ${{ secrets.GITHUB_TOKEN }}
     body: |
       These are the Armbian OS image
       * OS information
@@ -581,7 +583,7 @@ armbian-update
 | 可选参数  | 默认值        | 选项           | 说明                              |
 | -------- | ------------ | ------------- | -------------------------------- |
 | -r       | ophub/kernel | `<owner>/<repo>` | 设置从 github.com 下载内核的仓库  |
-| -u       | 自动化        | stable/flippy/beta/rk3588/rk35xx/h6 | 设置使用的内核的 [tags 后缀](https://github.com/ophub/kernel/releases) |
+| -u       | 自动化        | stable/flippy/beta/rk3588/rk35xx | 设置使用的内核的 [tags 后缀](https://github.com/ophub/kernel/releases) |
 | -k       | 最新版        | 内核版本       | 设置[内核版本](https://github.com/ophub/kernel/releases/tag/kernel_stable)  |
 | -b       | yes          | yes/no        | 更新内核时自动备份当前系统使用的内核    |
 | -d       | deb          | tar/deb       | 设置优先使用的内核包格式。若指定格式不存在，脚本将自动尝试另一种格式。如需编译自定义驱动推荐选择 `deb` 格式。 |
@@ -1476,7 +1478,9 @@ cm9vdA 的开源项目 [cm9vdA/build-linux](https://github.com/cm9vdA/build-linu
 
 ### 12.13 如何反编译 dtb 文件
 
-部分新设备不在当前支持列表中（或存在硬件变体），可通过反编译 dtb 文件调整相关参数进行适配尝试。
+#### 12.13.1 直接反编译 dtb 文件
+
+可以直接对已有的 dtb 文件进行反编译，通过调整相关参数进行适配。
 
 ```shell
 # 安装依赖
@@ -1489,13 +1493,21 @@ dtc -I dtb -O dts -o xxx.dts xxx.dtb
 # 2. 编译命令（使用 dts 编译生成 dtb 文件）
 dtc -I dts -O dtb -o xxx.dtb xxx.dts
 
-# 3.保存数据并重启
+# 3.保存并重启
 sync && reboot
-
-# 4.[自选动作]根据需求进行测试
-# 例如在解决 12.16 中介绍的问题时，重新安装测试
-armbian-install
 ```
+
+#### 12.13.2 从运行中的设备导出完全态 DTS（推荐）
+
+在某些设备的适配与维护过程中，我们可能只能获取到编译后的二进制设备树文件（.dtb），而缺失对应的内核源码（.dts）。此时，建议在正常运行的 Armbian 系统中执行以下命令，直接从内核运行时环境中反编译并导出当前生效的设备树：
+
+```shell
+dtc -I fs -O dts /sys/firmware/devicetree/base > my_runtime.dts
+```
+
+该命令直接从内核内存中提取设备树数据，其导出的文本比单纯反编译磁盘上的静态 .dtb 文件更为准确和完整。因为引导加载程序（如 U-Boot）或系统固件在启动阶段，会根据实际的硬件检测结果对设备树进行动态修正或注入（例如：实时更新 bootargs 启动参数、动态开关特定外设的 status 状态、或调整 reg 寄存器地址等）。如果直接反编译磁盘上的静态文件，将无法捕获这些运行时改动。
+
+采用此方法获取的是内核最终应用形态的运行态（Runtime）设备树，能真实反映硬件在系统底层的实际拓扑与工作状态。在参考、修复或重新适配该设备的 .dts 源码时，此文件具有极高的参考价值，能让排查冲突和补全外设配置变得更加准确和高效。
 
 ### 12.14 如何修改 cmdline 设置
 
@@ -1510,6 +1522,8 @@ Amlogic 设备在 `/boot/uEnv.txt` 文件中配置。Rockchip 和 Allwinner 设�
 - 通过在 cmdline 中添加 `usbcore.usbfs_memory_mb=1024` 设置，可以永久将 USBFS 内存缓冲区从默认的 `16 mb` 改为更大（`cat /sys/module/usbcore/parameters/usbfs_memory_mb`），提升 USB 传输大文件的能力。
 
 - 通过在 cmdline 中添加 `usbcore.usb3_disable=1` 设置，可以禁用 USB 3.0 的所有设备。
+
+- 通过在 cmdline 中添加 `usbcore.autosuspend=-1` 设置，可以禁用 USB 自动挂起（防止 USB 设备省电断电）；添加 `rootdelay=120` 设置，可以在系统启动时等待 120 秒再挂载根分区（给 USB 设备时间就绪）；添加 `mitigations=off` 设置，可以关闭 CPU 漏洞缓解（Spectre/Meltdown），提升性能。
 
 - 通过在 cmdline 中添加 `extraargs=video=HDMI-A-1:1920x1080@60` 设置，可以将视频显示模式强制为 1080p。
 
